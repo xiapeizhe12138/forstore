@@ -138,6 +138,43 @@ class RealESRGANProcessor:
         else:
             return np.eye(21)  # 脉冲核
 
+    def _final_process(self, img, sinc_kernel):
+        """最终处理阶段：包含sinc滤波和JPEG压缩的顺序随机化"""
+        # 随机选择处理顺序 (50%概率交换顺序)
+        if np.random.uniform() < 0.5:
+            # 顺序1: 先调整尺寸 + sinc滤波，再JPEG压缩
+            img = self._resize_back(img)
+            img = filter2D(img, sinc_kernel)
+            img = self._jpeg_compress(img, stage=2)
+        else:
+            # 顺序2: 先JPEG压缩，再调整尺寸 + sinc滤波
+            img = self._jpeg_compress(img, stage=2)
+            img = self._resize_back(img)
+            img = filter2D(img, sinc_kernel)
+        
+        # 最终裁剪和量化
+        return self._final_crop_quantize(img)
+
+    def _resize_back(self, img):
+        """调整尺寸到目标分辨率"""
+        ori_h, ori_w = img.shape[2:]
+        target_h = ori_h // self.opt['scale']
+        target_w = ori_w // self.opt['scale']
+        mode = random.choice(["area", "bilinear", "bicubic"])
+        return F.interpolate(img, size=(target_h, target_w), mode=mode)
+
+    def _final_crop_quantize(self, img):
+        """最终裁剪和量化"""
+        # 随机裁剪
+        img = paired_random_crop(
+            img, 
+            ref_size=self.opt['gt_size'], 
+            scale=self.opt['scale']
+        )
+        
+        # 量化到0-255并归一化
+        return torch.clamp((img * 255.0).round(), 0, 255) / 255.0
+
 class DiffJPEG:
     """简化的JPEG压缩模拟器(具体实现需参考原始代码)"""
     def __init__(self, differentiable=False):
